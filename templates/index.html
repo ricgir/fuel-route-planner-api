@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FuelRoute - Optimal Fuel Route Planner</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Leaflet Map CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    
+    <!-- FontAwesome for Premium Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+
+    <style>
+        :root {
+            --bg-dark: #0a0e17;
+            --panel-bg: rgba(16, 22, 35, 0.65);
+            --panel-border: rgba(255, 255, 255, 0.08);
+            --accent-primary: #00d2ff;
+            --accent-primary-hover: #00a8cc;
+            --accent-secondary: #ff9f1c;
+            --accent-success: #2ec4b6;
+            --accent-danger: #e71d36;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --font-display: 'Outfit', sans-serif;
+            --font-body: 'Plus Jakarta Sans', sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-body);
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+        }
+
+        /* App Layout */
+        #app-container {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+
+        /* Sidebar Container (Glassmorphic) */
+        #sidebar {
+            width: 440px;
+            height: 100%;
+            background: var(--panel-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-right: 1px solid var(--panel-border);
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 10px 0 30px rgba(0, 0, 0, 0.5);
+            transition: transform 0.3s ease;
+        }
+
+        #logo-container {
+            padding: 24px;
+            border-bottom: 1px solid var(--panel-border);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        #logo-icon {
+            font-size: 28px;
+            color: var(--accent-primary);
+            filter: drop-shadow(0 0 8px rgba(0, 210, 255, 0.4));
+        }
+
+        #logo-text {
+            font-family: var(--font-display);
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            background: linear-gradient(135deg, #ffffff 30%, var(--accent-primary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        #logo-tag {
+            font-size: 10px;
+            background: rgba(0, 210, 255, 0.15);
+            color: var(--accent-primary);
+            padding: 2px 6px;
+            border-radius: 6px;
+            border: 1px solid rgba(0, 210, 255, 0.3);
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        #sidebar-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        /* Form styling */
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            position: relative;
+        }
+
+        .form-group label {
+            font-family: var(--font-display);
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .input-wrapper {
+            position: relative;
+        }
+
+        .input-wrapper i {
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+            font-size: 16px;
+            transition: color 0.2s;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 14px 14px 14px 42px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            color: var(--text-main);
+            font-family: var(--font-body);
+            font-size: 14px;
+            outline: none;
+            transition: all 0.3s ease;
+        }
+
+        .form-control:focus {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 12px rgba(0, 210, 255, 0.15);
+        }
+
+        .form-control:focus + i {
+            color: var(--accent-primary);
+        }
+
+        /* Parameters section */
+        .params-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        .slider-value {
+            font-weight: 700;
+            color: var(--accent-primary);
+        }
+
+        /* Submit Button */
+        #optimize-btn {
+            background: linear-gradient(135deg, var(--accent-primary) 0%, #0099ff 100%);
+            color: #030712;
+            border: none;
+            border-radius: 12px;
+            padding: 16px;
+            font-family: var(--font-display);
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            box-shadow: 0 4px 15px rgba(0, 210, 255, 0.3);
+            transition: all 0.3s ease;
+            margin-top: 8px;
+        }
+
+        #optimize-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 210, 255, 0.45);
+        }
+
+        #optimize-btn:active {
+            transform: translateY(0);
+        }
+
+        #optimize-btn:disabled {
+            background: #27272a;
+            color: #71717a;
+            box-shadow: none;
+            cursor: not-allowed;
+        }
+
+        /* Map Container */
+        #map-container {
+            flex: 1;
+            height: 100%;
+            position: relative;
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Results / Summary Card */
+        #results-container {
+            display: none;
+            animation: fadeIn 0.4s ease forwards;
+        }
+
+        .section-title {
+            font-family: var(--font-display);
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid var(--panel-border);
+            padding-bottom: 8px;
+        }
+
+        .summary-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--panel-border);
+            border-radius: 16px;
+            padding: 16px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .metric {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .metric-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+
+        .metric-value {
+            font-family: var(--font-display);
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .metric-value.highlight {
+            color: var(--accent-success);
+        }
+
+        .metric-value.highlight-secondary {
+            color: var(--accent-secondary);
+        }
+
+        /* Itinerary Timeline */
+        .itinerary-list {
+            position: relative;
+            padding-left: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .itinerary-list::before {
+            content: '';
+            position: absolute;
+            left: 5px;
+            top: 10px;
+            bottom: 10px;
+            width: 2px;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .timeline-item {
+            position: relative;
+        }
+
+        .timeline-badge {
+            position: absolute;
+            left: -20px;
+            top: 4px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: 2.5px solid var(--bg-dark);
+            z-index: 1;
+        }
+
+        .timeline-badge.start {
+            background-color: var(--accent-success);
+            box-shadow: 0 0 8px var(--accent-success);
+        }
+
+        .timeline-badge.fuel {
+            background-color: var(--accent-secondary);
+            box-shadow: 0 0 8px var(--accent-secondary);
+        }
+
+        .timeline-badge.finish {
+            background-color: var(--accent-danger);
+            box-shadow: 0 0 8px var(--accent-danger);
+        }
+
+        .timeline-content {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--panel-border);
+            border-radius: 12px;
+            padding: 12px;
+            font-size: 13px;
+            line-height: 1.5;
+            transition: all 0.2s ease;
+        }
+
+        .timeline-content:hover {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .timeline-header {
+            font-family: var(--font-display);
+            font-weight: 700;
+            margin-bottom: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .timeline-header .badge-price {
+            background: rgba(255, 159, 28, 0.15);
+            color: var(--accent-secondary);
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px solid rgba(255, 159, 28, 0.3);
+        }
+
+        .timeline-details {
+            color: var(--text-muted);
+            font-size: 12px;
+            margin-top: 6px;
+            display: flex;
+            justify-content: space-between;
+            border-top: 1px dashed rgba(255, 255, 255, 0.05);
+            padding-top: 6px;
+        }
+
+        .timeline-message {
+            margin-top: 4px;
+            font-weight: 500;
+        }
+
+        /* Error state */
+        #error-banner {
+            display: none;
+            background: rgba(231, 29, 54, 0.1);
+            border: 1px solid rgba(231, 29, 54, 0.3);
+            color: #ff4d6d;
+            border-radius: 12px;
+            padding: 14px;
+            font-size: 13px;
+            font-weight: 500;
+            align-items: flex-start;
+            gap: 10px;
+            margin-top: 12px;
+            animation: shake 0.3s ease;
+        }
+
+        /* Spinner / Loading state */
+        .spinner {
+            display: none;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(3, 7, 18, 0.3);
+            border-top: 3px solid #030712;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        /* Custom Leaflet Marker Styling */
+        .custom-marker-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            border: 2px solid white;
+            color: white;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+            font-size: 12px;
+        }
+
+        /* Leaflet Popups Style Override */
+        .leaflet-popup-content-wrapper {
+            background: #0f172a !important;
+            color: var(--text-main) !important;
+            border: 1px solid var(--panel-border);
+            border-radius: 12px;
+            padding: 4px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+        }
+        .leaflet-popup-tip {
+            background: #0f172a !important;
+        }
+        .leaflet-popup-content {
+            font-family: var(--font-body);
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
+        /* Animations */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-4px); }
+            75% { transform: translateX(4px); }
+        }
+
+        /* Custom Scrollbar */
+        #sidebar-content::-webkit-scrollbar {
+            width: 6px;
+        }
+        #sidebar-content::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        #sidebar-content::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+        #sidebar-content::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="app-container">
+        
+        <!-- SIDEBAR -->
+        <aside id="sidebar">
+            <div id="logo-container">
+                <i class="fa-solid fa-compass-drafting" id="logo-icon"></i>
+                <span id="logo-text">FuelRoute</span>
+                <span id="logo-tag">US ONLY</span>
+            </div>
+            
+            <div id="sidebar-content">
+                <!-- Planning Inputs Form -->
+                <div style="display: flex; flex-direction: column; gap: 16px;">
+                    <div class="form-group">
+                        <label for="start-input">Start Location</label>
+                        <div class="input-wrapper">
+                            <input type="text" id="start-input" class="form-control" placeholder="e.g., Chicago, IL" value="Chicago, IL">
+                            <i class="fa-solid fa-location-dot" style="color: var(--accent-success);"></i>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="finish-input">Destination</label>
+                        <div class="input-wrapper">
+                            <input type="text" id="finish-input" class="form-control" placeholder="e.g., Houston, TX" value="Houston, TX">
+                            <i class="fa-solid fa-flag-checkered" style="color: var(--accent-danger);"></i>
+                        </div>
+                    </div>
+                    
+                    <div class="params-grid">
+                        <div class="form-group">
+                            <label>Range <span class="slider-value" id="range-val">500</span> <span style="font-size:10px;">mi</span></label>
+                            <input type="range" id="range-slider" min="100" max="1000" step="50" value="500" style="accent-color: var(--accent-primary);">
+                        </div>
+                        <div class="form-group">
+                            <label>Efficiency <span class="slider-value" id="mpg-val">10</span> <span style="font-size:10px;">mpg</span></label>
+                            <input type="range" id="mpg-slider" min="5" max="40" step="1" value="10" style="accent-color: var(--accent-primary);">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Initial Fuel <span class="slider-value" id="fuel-val">50</span> <span style="font-size:10px;">gal</span></label>
+                        <input type="range" id="fuel-slider" min="0" max="50" step="1" value="50" style="accent-color: var(--accent-primary);">
+                        <span style="font-size:10.5px; color: var(--text-muted); margin-top:-4px;">Assumes a full tank by default.</span>
+                    </div>
+                    
+                    <button id="optimize-btn">
+                        <span class="spinner" id="optimize-spinner"></span>
+                        <i class="fa-solid fa-route" id="optimize-icon"></i>
+                        <span>Calculate Optimal Route</span>
+                    </button>
+                    
+                    <div id="error-banner">
+                        <i class="fa-solid fa-circle-exclamation" style="margin-top: 2px;"></i>
+                        <span id="error-msg"></span>
+                    </div>
+                </div>
+                
+                <!-- Results & Itinerary -->
+                <div id="results-container">
+                    <h3 class="section-title">
+                        <i class="fa-solid fa-chart-simple"></i> Trip Summary
+                    </h3>
+                    <div class="summary-card">
+                        <div class="metric">
+                            <span class="metric-label">Total Cost</span>
+                            <span class="metric-value highlight" id="summary-cost">$0.00</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Fuel Stops</span>
+                            <span class="metric-value highlight-secondary" id="summary-stops">0</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Distance</span>
+                            <span class="metric-value" id="summary-distance">0.0 mi</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Fuel Burned</span>
+                            <span class="metric-value" id="summary-fuel">0.0 gal</span>
+                        </div>
+                    </div>
+                    
+                    <h3 class="section-title">
+                        <i class="fa-solid fa-list-ol"></i> Optimal Itinerary
+                    </h3>
+                    <div class="itinerary-list" id="itinerary-timeline">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+            </div>
+        </aside>
+        
+        <!-- MAP -->
+        <main id="map-container">
+            <div id="map"></div>
+        </main>
+        
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    
+    <script>
+        // Initialize Map
+        const map = L.map('map', {
+            zoomControl: false
+        }).setView([39.8283, -98.5795], 4); // Center of US
+
+        // Premium Dark Map Tiles
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+            subdomains: 'abcd',
+            maxZoom: 20
+        }).addTo(map);
+
+        L.control.zoom({
+            position: 'topright'
+        }).addTo(map);
+
+        // Map layer groups
+        let routeLayer = null;
+        let markersLayer = L.layerGroup().addTo(map);
+
+        // UI Element Selectors
+        const startInput = document.getElementById('start-input');
+        const finishInput = document.getElementById('finish-input');
+        const rangeSlider = document.getElementById('range-slider');
+        const rangeVal = document.getElementById('range-val');
+        const mpgSlider = document.getElementById('mpg-slider');
+        const mpgVal = document.getElementById('mpg-val');
+        const fuelSlider = document.getElementById('fuel-slider');
+        const fuelVal = document.getElementById('fuel-val');
+        
+        const optimizeBtn = document.getElementById('optimize-btn');
+        const optimizeSpinner = document.getElementById('optimize-spinner');
+        const optimizeIcon = document.getElementById('optimize-icon');
+        const errorBanner = document.getElementById('error-banner');
+        const errorMsg = document.getElementById('error-msg');
+        
+        const resultsContainer = document.getElementById('results-container');
+        const summaryCost = document.getElementById('summary-cost');
+        const summaryStops = document.getElementById('summary-stops');
+        const summaryDistance = document.getElementById('summary-distance');
+        const summaryFuel = document.getElementById('summary-fuel');
+        const itineraryTimeline = document.getElementById('itinerary-timeline');
+
+        // Dynamic Slider Interaction
+        function updateFuelSliderMax() {
+            const range = parseFloat(rangeSlider.value);
+            const mpg = parseFloat(mpgSlider.value);
+            const capacity = range / mpg;
+            
+            // Save current value percentage to keep slider position relative if possible
+            const oldVal = parseFloat(fuelSlider.value);
+            const oldMax = parseFloat(fuelSlider.max);
+            const ratio = oldMax > 0 ? (oldVal / oldMax) : 1;
+            
+            fuelSlider.max = capacity.toFixed(1);
+            const newVal = ratio * capacity;
+            fuelSlider.value = newVal.toFixed(1);
+            fuelVal.textContent = parseFloat(fuelSlider.value).toFixed(1);
+        }
+
+        rangeSlider.addEventListener('input', () => {
+            rangeVal.textContent = rangeSlider.value;
+            updateFuelSliderMax();
+        });
+
+        mpgSlider.addEventListener('input', () => {
+            mpgVal.textContent = mpgSlider.value;
+            updateFuelSliderMax();
+        });
+
+        fuelSlider.addEventListener('input', () => {
+            fuelVal.textContent = parseFloat(fuelSlider.value).toFixed(1);
+        });
+
+        // Initialize sliders
+        updateFuelSliderMax();
+
+        // Main Route Optimization Call
+        optimizeBtn.addEventListener('click', async () => {
+            // Reset UI States
+            errorBanner.style.display = 'none';
+            resultsContainer.style.display = 'none';
+            optimizeBtn.disabled = true;
+            optimizeSpinner.style.display = 'inline-block';
+            optimizeIcon.style.display = 'none';
+
+            const start = startInput.value.trim();
+            const finish = finishInput.value.trim();
+            const range = rangeSlider.value;
+            const mpg = mpgSlider.value;
+            const initialFuel = fuelSlider.value;
+
+            if (!start || !finish) {
+                showError("Please enter both a start location and destination.");
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/route/?start=${encodeURIComponent(start)}&finish=${encodeURIComponent(finish)}&range=${range}&mpg=${mpg}&initial_fuel=${initialFuel}`);
+                const data = await response.json();
+
+                if (!response.ok || !data.success) {
+                    showError(data.error || "An unexpected error occurred while planning the route.");
+                    return;
+                }
+
+                displayResults(data);
+
+            } catch (err) {
+                console.error(err);
+                showError("Failed to communicate with the route planning API. Please check your connection and try again.");
+            } finally {
+                optimizeBtn.disabled = false;
+                optimizeSpinner.style.display = 'none';
+                optimizeIcon.style.display = 'inline-block';
+            }
+        });
+
+        function showError(msg) {
+            errorMsg.textContent = msg;
+            errorBanner.style.display = 'flex';
+            optimizeBtn.disabled = false;
+            optimizeSpinner.style.display = 'none';
+            optimizeIcon.style.display = 'inline-block';
+        }
+
+        function displayResults(data) {
+            // 1. Clear previous layers
+            if (routeLayer) {
+                map.removeLayer(routeLayer);
+            }
+            markersLayer.clearLayers();
+
+            // 2. Render route on map
+            routeLayer = L.geoJSON(data.route_geometry, {
+                style: {
+                    color: '#00d2ff',
+                    weight: 5,
+                    opacity: 0.8,
+                    lineJoin: 'round'
+                }
+            }).addTo(map);
+
+            // 3. Add Custom Markers
+            // Start Marker
+            const startCoords = [data.start.lat, data.start.lon];
+            const startMarker = L.marker(startCoords, {
+                icon: L.divIcon({
+                    className: 'leaflet-div-icon',
+                    html: `<div class="custom-marker-icon" style="background-color: var(--accent-success); width: 28px; height: 28px;"><i class="fa-solid fa-play"></i></div>`,
+                    iconSize: [28, 28],
+                    iconAnchor: [14, 14]
+                })
+            }).bindPopup(`<b>Start Location</b><br>${data.start.name}`).addTo(markersLayer);
+
+            // Finish Marker
+            const finishCoords = [data.finish.lat, data.finish.lon];
+            const finishMarker = L.marker(finishCoords, {
+                icon: L.divIcon({
+                    className: 'leaflet-div-icon',
+                    html: `<div class="custom-marker-icon" style="background-color: var(--accent-danger); width: 28px; height: 28px;"><i class="fa-solid fa-flag-checkered"></i></div>`,
+                    iconSize: [28, 28],
+                    iconAnchor: [14, 14]
+                })
+            }).bindPopup(`<b>Destination</b><br>${data.finish.name}`).addTo(markersLayer);
+
+            // Fuel Stop Markers
+            data.stops.forEach((stop, index) => {
+                const stopCoords = [stop.latitude, stop.longitude];
+                L.marker(stopCoords, {
+                    icon: L.divIcon({
+                        className: 'leaflet-div-icon',
+                        html: `<div class="custom-marker-icon" style="background-color: var(--accent-secondary); width: 26px; height: 26px;"><i class="fa-solid fa-gas-pump"></i></div>`,
+                        iconSize: [26, 26],
+                        iconAnchor: [13, 13]
+                    })
+                }).bindPopup(`
+                    <div style="font-family: var(--font-body);">
+                        <strong style="color: var(--accent-secondary); font-size:14px;">Stop #${index + 1}: ${stop.name}</strong><br>
+                        <span style="color: var(--text-muted); font-size:11px;">${stop.address}, ${stop.city}, ${stop.state}</span><br>
+                        <div style="margin-top: 6px; border-top: 1px solid var(--panel-border); padding-top: 6px;">
+                            <b>Price:</b> $${stop.price.toFixed(3)}/gal<br>
+                            <b>Refill Volume:</b> ${stop.fuel_bought.toFixed(2)} gal<br>
+                            <b>Cost at stop:</b> $${stop.cost.toFixed(2)}
+                        </div>
+                    </div>
+                `).addTo(markersLayer);
+            });
+
+            // Fit bounds to show entire route
+            map.fitBounds(routeLayer.getBounds(), {
+                padding: [50, 50]
+            });
+
+            // 4. Update Summary Card Values
+            summaryCost.textContent = `$${data.total_cost.toFixed(2)}`;
+            summaryStops.textContent = data.stops.length;
+            summaryDistance.textContent = `${data.route_distance_miles.toFixed(1)} mi`;
+            summaryFuel.textContent = `${data.total_fuel_consumed_gallons.toFixed(1)} gal`;
+
+            // 5. Render Timeline Itinerary
+            itineraryTimeline.innerHTML = '';
+            
+            data.itinerary.forEach(item => {
+                const timelineItem = document.createElement('div');
+                timelineItem.className = 'timeline-item';
+                
+                let badgeClass = 'fuel';
+                let headerText = '';
+                let detailsHtml = '';
+                let priceHtml = '';
+
+                if (item.type === 'start') {
+                    badgeClass = 'start';
+                    headerText = 'Start Location';
+                    detailsHtml = `
+                        <div class="timeline-message">${item.message}</div>
+                        <div class="timeline-details">
+                            <span>Distance: 0.0 mi</span>
+                        </div>
+                    `;
+                } else if (item.type === 'finish') {
+                    badgeClass = 'finish';
+                    headerText = 'Destination';
+                    detailsHtml = `
+                        <div class="timeline-message">${item.message}</div>
+                        <div class="timeline-details">
+                            <span>Total Distance: ${item.distance.toFixed(1)} mi</span>
+                            <span>Leg: ${item.leg_distance.toFixed(1)} mi</span>
+                        </div>
+                    `;
+                } else if (item.type === 'fuel_stop') {
+                    badgeClass = 'fuel';
+                    headerText = item.name;
+                    priceHtml = `<span class="badge-price">$${item.price.toFixed(3)}/gal</span>`;
+                    detailsHtml = `
+                        <div style="font-size:11px; color: var(--text-muted); margin-bottom: 4px;">
+                            <i class="fa-solid fa-location-dot"></i> ${item.city}, ${item.state}
+                        </div>
+                        <div class="timeline-message">${item.message}</div>
+                        <div class="timeline-details">
+                            <span>Bought: ${item.fuel_bought.toFixed(2)} gal</span>
+                            <span>Cost: $${item.cost.toFixed(2)}</span>
+                        </div>
+                        <div class="timeline-details" style="border-top:none; padding-top:0; margin-top:2px;">
+                            <span>Route dist: ${item.distance.toFixed(1)} mi</span>
+                            <span>Leg dist: ${item.leg_distance.toFixed(1)} mi</span>
+                        </div>
+                    `;
+                }
+
+                timelineItem.innerHTML = `
+                    <div class="timeline-badge ${badgeClass}"></div>
+                    <div class="timeline-content">
+                        <div class="timeline-header">
+                            <span>${headerText}</span>
+                            ${priceHtml}
+                        </div>
+                        ${detailsHtml}
+                    </div>
+                `;
+                
+                itineraryTimeline.appendChild(timelineItem);
+            });
+
+            // Display the results container
+            resultsContainer.style.display = 'block';
+        }
+    </script>
+</body>
+</html>
