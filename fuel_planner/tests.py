@@ -116,10 +116,10 @@ class FuelPlannerTests(TestCase):
         
         # Total cost: 600 miles total, burns 60 gallons.
         # Starts with 40 gallons. Arrives at Station A (300 miles) with 10 gallons.
-        # Refills to 40 gallons (buys 30 gallons @ $2.00 = $60).
-        # Drives final 300 miles to Finish, burning 30 gallons.
-        # Total money spent at cash registers: $60.00
-        self.assertAlmostEqual(res["total_cost"], 60.0, places=1)
+        # Next leg is 300 miles. Leaving A requires 30 + 3 (reserve) = 33 gallons.
+        # We buy 33 - 10 = 23 gallons @ $2.00 = $46.00.
+        # (This is more cost-effective than refueling to capacity since Finish is cheaper/free).
+        self.assertAlmostEqual(res["total_cost"], 46.0, delta=0.1)
 
     def test_dp_optimizer_initial_fuel_constraint(self):
         # Route points (0, 0) -> Station A (1.0, 0.0) (~69.1 miles) -> Finish (2.0, 0.0) (~138.2 miles)
@@ -135,7 +135,12 @@ class FuelPlannerTests(TestCase):
         route_coords = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)]
         res = find_optimal_fuel_stops(route_coords, stations, vehicle_range=500.0, mpg=10.0, initial_fuel=5.0)
         self.assertFalse(res["success"])
-        self.assertIn("no valid fueling plan", res["error"])
+        self.assertIn("no valid fueling plan could be constructed", res["error"])
+
+        # If initial fuel is less than the safety reserve itself (e.g. 2.0 gallons)
+        res_reserve = find_optimal_fuel_stops(route_coords, stations, vehicle_range=500.0, mpg=10.0, initial_fuel=2.0)
+        self.assertFalse(res_reserve["success"])
+        self.assertIn("less than the required safety reserve", res_reserve["error"])
 
         # If we start with 10 gallons (range 100 miles), we can reach Station A
         # but we cannot reach the Finish (138.2 miles) directly. So we must stop at Station A.
@@ -157,7 +162,7 @@ class FuelPlannerTests(TestCase):
             'range': '-500'
         })
         self.assertEqual(response2.status_code, 400)
-        self.assertIn("positive numbers", response2.json()["error"])
+        self.assertIn("valid numbers", response2.json()["error"])
 
         # Invalid initial fuel
         response3 = self.client.get(reverse('route_api'), {
@@ -167,3 +172,65 @@ class FuelPlannerTests(TestCase):
         })
         self.assertEqual(response3.status_code, 400)
         self.assertIn("cannot be negative", response3.json()["error"])
+
+    def test_avoid_small_refill_penalty(self):
+        # Set up 4 stations:
+        # A: ~50 miles. Price = $2.00
+        self.station1.latitude = 50.0 / 69.11
+        self.station1.longitude = 0.0
+        self.station1.retail_price = 2.00
+        self.station1.save()
+        
+        # B: ~100 miles. Price = $2.00
+        self.station2.latitude = 100.0 / 69.11
+        self.station2.longitude = 0.0
+        self.station2.retail_price = 2.00
+        self.station2.save()
+        
+        # C: ~150 miles. Price = $2.00
+        station3 = FuelStation.objects.create(
+            opis_id=103,
+            name="Station C",
+            address="789 Pine Rd",
+            city="CityC",
+            state="IN",
+            rack_id=999,
+            retail_price=2.00,
+            latitude=150.0 / 69.11,
+            longitude=0.0
+        )
+        
+        # D: ~120 miles. Price = $2.00
+        station4 = FuelStation.objects.create(
+            opis_id=104,
+            name="Station D",
+            address="101 Maple Ave",
+            city="CityD",
+            state="IN",
+            rack_id=999,
+            retail_price=2.00,
+            latitude=120.0 / 69.11,
+            longitude=0.0
+        )
+        
+        stations = FuelStation.objects.all()
+        # Route from 0 to 200 miles
+        route_coords = [
+            (0.0, 0.0),
+            (50.0 / 69.11, 0.0),
+            (100.0 / 69.11, 0.0),
+            (120.0 / 69.11, 0.0),
+            (150.0 / 69.11, 0.0),
+            (200.0 / 69.11, 0.0)
+        ]
+        
+        # vehicle_range = 100, mpg = 10, initial_fuel = 10.0, reserve_fuel = 3.0
+        # If we take path Start -> A -> D -> C -> Finish, we'd need a 1.0 gallon refill at C.
+        # If we take path Start -> A -> B -> C -> Finish, we make 5.0 gallon refills everywhere.
+        # The penalty-aware solver should choose [A, B, C] over [A, D, C].
+        res = find_optimal_fuel_stops(route_coords, stations, vehicle_range=100.0, mpg=10.0, initial_fuel=10.0, reserve_fuel=3.0)
+        self.assertTrue(res["success"])
+        self.assertEqual(len(res["stops"]), 3)
+        self.assertEqual(res["stops"][0]["opis_id"], 101) # A
+        self.assertEqual(res["stops"][1]["opis_id"], 102) # B
+        self.assertEqual(res["stops"][2]["opis_id"], 103) # C
