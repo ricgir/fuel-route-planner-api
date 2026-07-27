@@ -1,31 +1,113 @@
 # Fuel Stop Route Planner API & Interactive Dashboard
 
-A high-performance, cost-optimized vehicle routing and refueling planner designed for long-distance travel in the USA.
-
-The application calculates the most cost-effective fuel stops along a driving route between any two US locations, using a 2D Dynamic Programming (DP) algorithm and a preprocessed dataset of 7,531 fuel stations.
+**A Django REST API and interactive dashboard that calculates the most cost-effective fuel stops between two locations in the United States. The application minimizes total fuel cost while respecting vehicle range constraints, using a single routing API request and locally optimized fuel stop selection.**
 
 ---
 
-## 🚀 Key Engineering & Algorithmic Highlights
+## 🏗️ Architecture & Request Flow
 
-### ⚡ Smart API Caching & Efficiency
-* **Geocoding & Route Cache**: To minimize network latency and prevent external API throttling, Nominatim geocoding and OSRM routing responses are cached locally (valid for 24 hours).
-* **Single Request Constraint**: Exactly **one routing request** is made per unique origin–destination pair.
-* **Pure Local Execution**: All downstream computations—including fuel stop filtering, spatial distance lookups, clustering, and the 2D DP optimization solver—run entirely locally on the SQLite database in under **10 milliseconds**.
+```text
+       User Input (Start & Destination)
+                     │
+                     ▼
+     Nominatim Geocoder (Cached for 24h)
+                     │
+                     ▼
+       OSRM Route API (Cached for 24h)
+                     │
+                     ▼
+        Route Corridor Identification
+                     │
+                     ▼
+  KD-tree Spatial Lookup (Find stations near corridor)
+                     │
+                     ▼
+  Candidate Station Filtering (Filter by search range)
+                     │
+                     ▼
+    Station Merging (Cheapest per 3-mile cluster)
+                     │
+                     ▼
+   Fuel Stop Solver (Dynamic Programming State Search)
+                     │
+                     ▼
+   JSON API Response + Leaflet.js Interactive Dashboard
+```
 
-### 🧠 2D Dynamic Programming Optimizer
-Unlike simple greedy algorithms, the custom solver implements a state-space model tracking `(station, last_refuel_station)` to make globally optimal choices:
-* **Flexible Purchase Quantity**: Refuels only as much as necessary to reach a cheaper station or the final destination, rather than naively refilling the tank to full capacity.
+---
+
+## ⚡ API Call & Execution Efficiency
+
+To guarantee maximum speed and prevent external API throttling, the system strictly separates external network requests from local optimization tasks:
+
+| Component / Action | External Network Calls | Details |
+| :--- | :---: | :--- |
+| **Geocode Origin** | 1 | Cached locally for 24 hours |
+| **Geocode Destination** | 1 | Cached locally for 24 hours |
+| **Routing API** | 1 | Cached locally for 24 hours |
+| **Fuel Station Spatial Lookup** | **0** | Executed locally via database index |
+| **Route Stop Optimization** | **0** | Executed locally in memory ($<10\text{ms}$) |
+| **Fuel Cost Calculation** | **0** | Executed locally in memory |
+
+---
+
+## 🧠 Cost-Optimized Fuel Stop Solver
+
+The optimizer uses a dynamic programming-based state search to evaluate feasible refueling sequences and minimize the overall fuel cost. The solver implements a state-space model tracking `(station, last_refuel_station)` to make globally optimal decisions:
+
+* **Flexible Purchase Quantity**: Refuels only as much as necessary to reach a cheaper station or the final destination, rather than naively refilling the tank to full capacity at every stop.
 * **Safety Fuel Reserve**: Enforces a minimum safety reserve in the tank (e.g., 3.0 gallons) at any point along the journey.
 * **Detour Distance Modeling**: Calculates exact perpendicular detour distances to and from stations near the corridor, incorporating them directly into the cost function.
-* **Candidate Station Pruning & Merging**: Merges stations within 3.0 miles of each other, keeping only the cheapest candidate to dramatically optimize the search space.
-* **Minimum Refuel Threshold**: Incorporates a soft penalty constraint (+$1000.0) to avoid unnecessary stop overhead for tiny refuels (less than 5.0 gallons) unless absolutely necessary for feasibility.
+* **Candidate Station Pruning & Merging**: Merges stations within 3.0 miles of each other, reducing the search space while preserving the lowest-cost candidate.
+* **Minimum Refuel Threshold**: Very small refueling stops are avoided unless required to maintain a feasible route. This produces more realistic itineraries while preserving route correctness.
+
+---
+
+## 🗄️ Offline Data Preprocessing
+
+One of the key design decisions of this system is the offline ingestion pipeline, which speeds up real-time queries:
+1. **Raw Price Dataset**: Imported the `fuel-prices-for-be-assessment.csv` dataset containing retail prices of thousands of US fuel stops.
+2. **Offline Geocoding Map**: Resolved the latitude/longitude coordinates of each station by cross-referencing city names against the local `us_cities.csv` mapping database.
+3. **SQLite Database Persistence**: Seeded the preprocessed stations to a local SQLite database (`db.sqlite3`), avoiding thousands of real-time API calls to geocode individual fuel stops.
+
+---
+
+## 📈 Stage Complexities
+
+| Processing Stage | Complexity | Description / Algorithm |
+| :--- | :---: | :--- |
+| **KD-tree Lookup** | $O(\log N)$ | Fast spatial indexing to retrieve stations near the route. |
+| **Candidate Filtering** | $O(M)$ | Linear scan to check corridor/distance parameters. |
+| **Station Merging** | $O(M \log M)$ | Merging and sorting to keep the cheapest option per 3-mile cluster. |
+| **Optimization Solver** | $O(M^2)$ | Dynamic programming state search over $M$ candidate stations. |
+
+---
+
+## 📌 Assumptions
+* The vehicle starts with a full tank unless `initial_fuel` is provided.
+* Fuel consumption rate (MPG) is constant throughout the entire trip.
+* Fuel prices are static and taken from the supplied dataset.
+* Only stations present in the database are considered.
+* Routes and driving paths are generated by the OSRM API.
+
+---
+
+## 📊 Practical Example (Chicago ➔ Houston)
+
+- **Start**: Chicago, IL
+- **Destination**: Houston, TX
+- **Vehicle Range / Efficiency**: 500 miles / 10 MPG
+- **Safety Reserve**: 3.0 gallons
+- **Itinerary Results**:
+  * **Total Distance**: 1082.2 miles
+  * **Total Cost**: $174.85
+  * **Optimal Fuel Stops**: 4 stops
 
 ---
 
 ## 🛠️ Tech Stack
 * **Backend**: Django 5.1.15, SQLite
-* **Frontend**: HTML5, Vanilla CSS (Premium Slate design), Leaflet.js maps
+* **Frontend**: HTML5, Vanilla CSS, Leaflet.js interactive maps
 * **APIs**: OpenStreetMap (OSRM & Nominatim)
 
 ---
