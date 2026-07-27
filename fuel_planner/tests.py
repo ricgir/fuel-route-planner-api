@@ -234,3 +234,134 @@ class FuelPlannerTests(TestCase):
         self.assertEqual(res["stops"][0]["opis_id"], 101) # A
         self.assertEqual(res["stops"][1]["opis_id"], 102) # B
         self.assertEqual(res["stops"][2]["opis_id"], 103) # C
+
+    def test_zero_gallon_stops_prevented(self):
+        # Route is 100 miles. Start (0,0) -> Station A (40 miles) -> Finish (100 miles).
+        # Range = 500 miles, initial_fuel = 50.0 (full).
+        self.station1.latitude = 40.0 / 69.11
+        self.station1.longitude = 0.0
+        self.station1.save()
+        
+        stations = FuelStation.objects.all()
+        route_coords = [(0.0, 0.0), (40.0 / 69.11, 0.0), (100.0 / 69.11, 0.0)]
+        res = find_optimal_fuel_stops(route_coords, stations, vehicle_range=500.0, mpg=10.0, initial_fuel=50.0, reserve_fuel=3.0)
+        self.assertTrue(res["success"])
+        # Should have 0 stops because initial fuel is more than enough, and stopping at A to buy 0 gallons is skipped.
+        self.assertEqual(len(res["stops"]), 0)
+
+    def test_fuel_reserve_limitations(self):
+        # If safety reserve >= tank capacity, it is infeasible.
+        route_coords = [(0.0, 0.0), (100.0 / 69.11, 0.0)]
+        stations = FuelStation.objects.all()
+        res = find_optimal_fuel_stops(route_coords, stations, vehicle_range=100.0, mpg=10.0, initial_fuel=10.0, reserve_fuel=10.0)
+        self.assertFalse(res["success"])
+
+    def test_detour_distance_calculations(self):
+        # Station is off-route. Test that perp distance is calculated and included.
+        # Route: Start (0,0) -> Finish (100 miles).
+        # Station at 50 miles along, and 2 miles perpendicular detour.
+        self.station1.latitude = 50.0 / 69.11
+        self.station1.longitude = 2.0 / 52.0
+        self.station1.save()
+        
+        stations = FuelStation.objects.all()
+        route_coords = [(0.0, 0.0), (50.0 / 69.11, 0.0), (100.0 / 69.11, 0.0)]
+        res = find_optimal_fuel_stops(route_coords, stations, vehicle_range=100.0, mpg=10.0, initial_fuel=7.0, reserve_fuel=1.0)
+        self.assertTrue(res["success"])
+        # Should stop at station1
+        self.assertEqual(len(res["stops"]), 1)
+        # Detour distance should be greater than 0.0
+        self.assertTrue(res["stops"][0]["detour_distance"] > 0.0)
+
+    def test_station_merging_cheapest(self):
+        # Seed two stations very close to each other (within 3 miles):
+        # Station A: $3.00, Station B: $2.00
+        # Check that only the cheaper one is kept.
+        self.station1.latitude = 50.0 / 69.11
+        self.station1.longitude = 0.0
+        self.station1.retail_price = 3.00
+        self.station1.save()
+        
+        self.station2.latitude = 50.1 / 69.11
+        self.station2.longitude = 0.0
+        self.station2.retail_price = 2.00
+        self.station2.save()
+        
+        stations = FuelStation.objects.all()
+        route_coords = [(0.0, 0.0), (50.0 / 69.11, 0.0), (100.0 / 69.11, 0.0)]
+        res = find_optimal_fuel_stops(route_coords, stations, vehicle_range=100.0, mpg=10.0, initial_fuel=7.0, reserve_fuel=1.0)
+        self.assertTrue(res["success"])
+        self.assertEqual(len(res["stops"]), 1)
+        # Should pick the cheaper one (station2, price $2.00)
+        self.assertEqual(res["stops"][0]["opis_id"], 102)
+
+    def test_initial_fuel_default(self):
+        # Test that without specifying initial fuel, it defaults to a full tank
+        route_coords = [(0.0, 0.0), (100.0 / 69.11, 0.0)]
+        stations = FuelStation.objects.all()
+        res = find_optimal_fuel_stops(route_coords, stations, vehicle_range=500.0, mpg=10.0, reserve_fuel=3.0)
+        self.assertTrue(res["success"])
+        self.assertEqual(res["itinerary"][0]["fuel_level"], 50.0)
+
+    def test_flexible_refuel_pricing(self):
+        # Expensive station A ($4.00) followed by a cheap station B ($2.00).
+        # We should only buy enough at A to safely reach B.
+        self.station1.latitude = 50.0 / 69.11
+        self.station1.longitude = 0.0
+        self.station1.retail_price = 4.00
+        self.station1.save()
+        
+        self.station2.latitude = 100.0 / 69.11
+        self.station2.longitude = 0.0
+        self.station2.retail_price = 2.00
+        self.station2.save()
+        
+        stations = FuelStation.objects.all()
+        route_coords = [(0.0, 0.0), (50.0 / 69.11, 0.0), (100.0 / 69.11, 0.0), (170.0 / 69.11, 0.0)]
+        res = find_optimal_fuel_stops(route_coords, stations, vehicle_range=100.0, mpg=10.0, initial_fuel=7.0, reserve_fuel=2.0)
+        self.assertTrue(res["success"])
+        self.assertEqual(len(res["stops"]), 2)
+        # First stop (A): should buy exactly 5.0 gallons (flexible refuel, not filling to capacity)
+        self.assertAlmostEqual(res["stops"][0]["fuel_bought"], 5.0, places=2)
+        # Second stop (B): should refuel to 9.0 gallons (buy 7.0 gallons > 5.0)
+        self.assertTrue(res["stops"][1]["fuel_bought"] > 5.0)
+
+    def test_minimum_refuel_threshold_avoidance(self):
+        # Route is 120 miles. Start -> A (50 miles) -> Finish (120 miles).
+        # Range = 500, mpg = 10. Initial fuel = 14.0.
+        # We need to buy 1.0 gallon at A to reach finish safely, but it gets adjusted to 5.0 to avoid penalty.
+        self.station1.latitude = 50.0 / 69.11
+        self.station1.longitude = 0.0
+        self.station1.save()
+        
+        stations = FuelStation.objects.all()
+        route_coords = [(0.0, 0.0), (50.0 / 69.11, 0.0), (120.0 / 69.11, 0.0)]
+        res = find_optimal_fuel_stops(route_coords, stations, vehicle_range=500.0, mpg=10.0, initial_fuel=14.0, reserve_fuel=3.0)
+        self.assertTrue(res["success"])
+        self.assertEqual(len(res["stops"]), 1)
+        self.assertAlmostEqual(res["stops"][0]["fuel_bought"], 5.0, places=2)
+
+    def test_cities_autocomplete(self):
+        # Create a unique station in a test city
+        FuelStation.objects.create(
+            opis_id=105,
+            name="Test Autocomplete Station",
+            address="102 Elm Rd",
+            city="Champaign",
+            state="IL",
+            rack_id=999,
+            retail_price=2.50,
+            latitude=40.11,
+            longitude=-88.24
+        )
+        
+        # Test query matching
+        response = self.client.get(reverse('cities_autocomplete'), {'q': 'cham'})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("Champaign, IL", data["cities"])
+        
+        # Test query too short
+        response_short = self.client.get(reverse('cities_autocomplete'), {'q': 'c'})
+        self.assertEqual(response_short.status_code, 200)
+        self.assertEqual(response_short.json()["cities"], [])

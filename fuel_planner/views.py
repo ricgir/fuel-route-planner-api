@@ -125,3 +125,68 @@ def route_api_view(request):
     }
     
     return JsonResponse(response_data)
+
+MAJOR_US_CITIES = [
+    "New York, NY", "Los Angeles, CA", "Chicago, IL", "Houston, TX", "Phoenix, AZ",
+    "Philadelphia, PA", "San Antonio, TX", "San Diego, CA", "Dallas, TX", "San Jose, CA",
+    "Austin, TX", "Jacksonville, FL", "Fort Worth, TX", "Columbus, OH", "Indianapolis, IN",
+    "Charlotte, NC", "San Francisco, CA", "Seattle, WA", "Denver, CO", "Washington, DC",
+    "Boston, MA", "El Paso, TX", "Nashville, TN", "Detroit, MI", "Oklahoma City, OK",
+    "Portland, OR", "Las Vegas, NV", "Memphis, TN", "Louisville, KY", "Baltimore, MD",
+    "Milwaukee, WI", "Albuquerque, NM", "Tucson, AZ", "Fresno, CA", "Sacramento, CA",
+    "Kansas City, MO", "Mesa, AZ", "Atlanta, GA", "Omaha, NE", "Colorado Springs, CO",
+    "Raleigh, NC", "Virginia Beach, VA", "Long Beach, CA", "Miami, FL", "Oakland, CA",
+    "Minneapolis, MN", "Tulsa, OK", "Bakersfield, CA", "Tampa, FL", "Wichita, KS",
+    "Arlington, TX", "Aurora, CO", "New Orleans, LA", "Cleveland, OH", "Anaheim, CA",
+    "Henderson, NV", "Honolulu, HI", "Santa Ana, CA", "Riverside, CA", "Corpus Christi, TX",
+    "Lexington, KY", "San Juan, PR", "Stockton, CA", "St. Paul, MN", "Cincinnati, OH",
+    "Irvine, CA", "Greensboro, NC", "Pittsburgh, PA", "Lincoln, NE", "Durham, NC",
+    "Orlando, FL", "Laredo, TX", "Anchorage, AK", "Chula Vista, CA", "Plano, TX",
+    "Newark, NJ", "Toledo, OH", "Fort Wayne, IN", "St. Petersburg, FL", "Lubbock, TX",
+    "St. Louis, MO", "Reno, NV", "Buffalo, NY", "Scottsdale, AZ", "Madison, WI",
+    "Chandler, AZ", "Chesapeake, VA", "Glendale, AZ", "Gilbert, AZ", "Winston-Salem, NC",
+    "North Las Vegas, NV", "Irving, TX", "Fremont, CA", "Garland, TX", "Hialeah, FL",
+    "Arlington, VA", "Richmond, VA", "Boise, ID", "Spokane, WA", "Baton Rouge, LA",
+    "Tacoma, WA", "Des Moines, IA"
+]
+
+@require_GET
+def cities_autocomplete_view(request):
+    """
+    Returns unique city/state combinations matching the query 'q'.
+    Includes both popular US cities and cities from the fuel station database.
+    """
+    q = request.GET.get('q', '').strip()
+    if not q or len(q) < 2:
+        return JsonResponse({"cities": []})
+        
+    q_lower = q.lower()
+    
+    # 1. Search popular US cities
+    popular_matches = []
+    for city in MAJOR_US_CITIES:
+        if q_lower in city.lower():
+            popular_matches.append(city)
+            
+    # 2. Search fuel station cities in database
+    db_matches = FuelStation.objects.filter(city__icontains=q).values('city', 'state').distinct()[:15]
+    db_cities = [f"{m['city']}, {m['state']}" for m in db_matches]
+    
+    # Combine and deduplicate
+    seen = set()
+    combined = []
+    for city in popular_matches + db_cities:
+        city_norm = city.lower().strip()
+        if city_norm not in seen:
+            seen.add(city_norm)
+            combined.append(city)
+            
+    # Sort: prioritize cities whose name starts with q, then the rest
+    def sort_key(city_str):
+        name_only = city_str.split(',')[0].lower().strip()
+        starts = name_only.startswith(q_lower)
+        return (not starts, city_str.lower())
+        
+    combined.sort(key=sort_key)
+    
+    return JsonResponse({"cities": combined[:10]})

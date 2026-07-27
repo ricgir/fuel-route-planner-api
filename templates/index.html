@@ -138,6 +138,40 @@
             position: relative;
         }
 
+        .autocomplete-suggestions {
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0;
+            right: 0;
+            background: #141a29;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 9999;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+        }
+
+        .autocomplete-suggestion {
+            padding: 12px 16px;
+            color: var(--text-main);
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .autocomplete-suggestion:hover {
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--accent-primary);
+        }
+
+        .autocomplete-suggestion:not(:last-child) {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
         .input-wrapper i {
             position: absolute;
             left: 14px;
@@ -862,6 +896,66 @@
             // Display the results container
             resultsContainer.style.display = 'block';
         }
+
+        function setupAutocomplete(input) {
+            const wrapper = input.parentElement;
+            
+            // Create suggestion container
+            const suggestionsContainer = document.createElement('div');
+            suggestionsContainer.className = 'autocomplete-suggestions';
+            suggestionsContainer.style.display = 'none';
+            wrapper.appendChild(suggestionsContainer);
+            
+            let debounceTimer;
+            
+            input.addEventListener('input', () => {
+                clearTimeout(debounceTimer);
+                const query = input.value.strip ? input.value.strip() : input.value.trim();
+                if (query.length < 2) {
+                    suggestionsContainer.innerHTML = '';
+                    suggestionsContainer.style.display = 'none';
+                    return;
+                }
+                
+                debounceTimer = setTimeout(() => {
+                    fetch(`/api/cities/?q=${encodeURIComponent(query)}`)
+                        .then(res => res.json())
+                        .then(data => {
+                            suggestionsContainer.innerHTML = '';
+                            if (data.cities && data.cities.length > 0) {
+                                data.cities.forEach(city => {
+                                    const item = document.createElement('div');
+                                    item.className = 'autocomplete-suggestion';
+                                    item.innerHTML = `<i class="fas fa-city" style="font-size: 12px; color: var(--accent-primary);"></i> <span>${city}</span>`;
+                                    item.addEventListener('click', () => {
+                                        input.value = city;
+                                        suggestionsContainer.style.display = 'none';
+                                        suggestionsContainer.innerHTML = '';
+                                    });
+                                    suggestionsContainer.appendChild(item);
+                                });
+                                suggestionsContainer.style.display = 'block';
+                            } else {
+                                suggestionsContainer.style.display = 'none';
+                            }
+                        })
+                        .catch(err => {
+                            console.error('Error fetching autocomplete cities:', err);
+                        });
+                }, 150); // 150ms debounce
+            });
+            
+            // Close suggestions when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!wrapper.contains(e.target)) {
+                    suggestionsContainer.style.display = 'none';
+                }
+            });
+        }
+
+        // Initialize autocomplete on fields
+        setupAutocomplete(startInput);
+        setupAutocomplete(finishInput);
     </script>
 </body>
 </html>
