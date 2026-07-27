@@ -321,6 +321,18 @@ def find_optimal_fuel_stops(route_coords, stations, vehicle_range=500.0, mpg=10.
                     continue
                     
                 bought = max(0.0, f_leave - f_arr)
+                if bought <= 0.0:
+                    continue
+                    
+                # Adjust to satisfy 5.0 gallon minimum refuel threshold if possible
+                if bought < 5.0:
+                    needed_to_reach_5 = 5.0 - bought
+                    room_in_tank = tank_capacity - f_leave
+                    if room_in_tank > 0.0:
+                        add_fuel = min(needed_to_reach_5, room_in_tank)
+                        f_leave_adj = f_leave + add_fuel
+                        bought = f_leave_adj - f_arr
+                        
                 cost_added = bought * nodes[j]["price"]
                 if 0.0 < bought < 5.0:
                     cost_added += 1000.0  # Soft penalty for refueling less than 5 gallons
@@ -381,7 +393,6 @@ def find_optimal_fuel_stops(route_coords, stations, vehicle_range=500.0, mpg=10.
         for idx_path, (next_next_node, stop_node) in enumerate(state_path):
             station = nodes[stop_node]["station"]
             d_leg = get_leg_distance(curr_node, stop_node)
-            total_dist_traveled += d_leg
             
             f_arr = curr_fuel - d_leg / mpg
             
@@ -396,6 +407,19 @@ def find_optimal_fuel_stops(route_coords, stations, vehicle_range=500.0, mpg=10.
                     f_leave = d_next / mpg + reserve_fuel
                     
             bought = max(0.0, f_leave - f_arr)
+            if bought <= 0.0:
+                continue
+                
+            # Adjust to satisfy 5.0 gallon minimum refuel threshold if possible
+            if bought < 5.0:
+                needed_to_reach_5 = 5.0 - bought
+                room_in_tank = tank_capacity - f_leave
+                if room_in_tank > 0.0:
+                    add_fuel = min(needed_to_reach_5, room_in_tank)
+                    f_leave = f_leave + add_fuel
+                    bought = f_leave - f_arr
+                    
+            total_dist_traveled += d_leg
             cost = bought * nodes[stop_node]["price"]
             
             stop_details.append({
