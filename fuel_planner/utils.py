@@ -322,6 +322,8 @@ def find_optimal_fuel_stops(route_coords, stations, vehicle_range=500.0, mpg=10.
                     
                 bought = max(0.0, f_leave - f_arr)
                 cost_added = bought * nodes[j]["price"]
+                if 0.0 < bought < 5.0:
+                    cost_added += 1000.0  # Soft penalty for refueling less than 5 gallons
                 total_cost = dp[j][i] + cost_added
                 if total_cost < dp[k][j]:
                     dp[k][j] = total_cost
