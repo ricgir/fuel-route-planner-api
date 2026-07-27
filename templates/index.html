@@ -517,11 +517,17 @@
                             <input type="range" id="mpg-slider" min="5" max="40" step="1" value="10" style="accent-color: var(--accent-primary);">
                         </div>
                     </div>
-
+ 
                     <div class="form-group">
                         <label>Initial Fuel <span class="slider-value" id="fuel-val">50</span> <span style="font-size:10px;">gal</span></label>
                         <input type="range" id="fuel-slider" min="0" max="50" step="1" value="50" style="accent-color: var(--accent-primary);">
                         <span style="font-size:10.5px; color: var(--text-muted); margin-top:-4px;">Assumes a full tank by default.</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Safety Reserve <span class="slider-value" id="reserve-val">3.0</span> <span style="font-size:10px;">gal</span></label>
+                        <input type="range" id="reserve-slider" min="0" max="10" step="0.5" value="3.0" style="accent-color: var(--accent-primary);">
+                        <span style="font-size:10.5px; color: var(--text-muted); margin-top:-4px;">Minimum safety fuel margin to maintain in the tank.</span>
                     </div>
                     
                     <button id="optimize-btn">
@@ -610,6 +616,8 @@
         const mpgVal = document.getElementById('mpg-val');
         const fuelSlider = document.getElementById('fuel-slider');
         const fuelVal = document.getElementById('fuel-val');
+        const reserveSlider = document.getElementById('reserve-slider');
+        const reserveVal = document.getElementById('reserve-val');
         
         const optimizeBtn = document.getElementById('optimize-btn');
         const optimizeSpinner = document.getElementById('optimize-spinner');
@@ -655,6 +663,10 @@
             fuelVal.textContent = parseFloat(fuelSlider.value).toFixed(1);
         });
 
+        reserveSlider.addEventListener('input', () => {
+            reserveVal.textContent = parseFloat(reserveSlider.value).toFixed(1);
+        });
+
         // Initialize sliders
         updateFuelSliderMax();
 
@@ -672,6 +684,7 @@
             const range = rangeSlider.value;
             const mpg = mpgSlider.value;
             const initialFuel = fuelSlider.value;
+            const reserve = reserveSlider.value;
 
             if (!start || !finish) {
                 showError("Please enter both a start location and destination.");
@@ -679,7 +692,7 @@
             }
 
             try {
-                const response = await fetch(`/api/route/?start=${encodeURIComponent(start)}&finish=${encodeURIComponent(finish)}&range=${range}&mpg=${mpg}&initial_fuel=${initialFuel}`);
+                const response = await fetch(`/api/route/?start=${encodeURIComponent(start)}&finish=${encodeURIComponent(finish)}&range=${range}&mpg=${mpg}&initial_fuel=${initialFuel}&reserve=${reserve}`);
                 const data = await response.json();
 
                 if (!response.ok || !data.success) {
