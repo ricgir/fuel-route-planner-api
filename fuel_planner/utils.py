@@ -106,7 +106,7 @@ def haversine_matrix(lats1, lons1, lats2, lons2):
     c = 2.0 * np.arcsin(np.sqrt(a))
     return R * c
 
-def find_optimal_fuel_stops(route_coords, stations, vehicle_range=500.0, mpg=10.0, initial_fuel=None):
+def find_optimal_fuel_stops(route_coords, stations, vehicle_range=500.0, mpg=10.0, initial_fuel=None, reserve_fuel=3.0):
     """
     Finds the mathematically optimal sequence of fuel stops using Dynamic Programming.
     
@@ -115,7 +115,8 @@ def find_optimal_fuel_stops(route_coords, stations, vehicle_range=500.0, mpg=10.
       - stations: QuerySet or list of FuelStation model instances.
       - vehicle_range: Max range of the vehicle in miles (default: 500).
       - mpg: Fuel efficiency in miles per gallon (default: 10).
-      - initial_fuel: Initial fuel in gallons. If None, assumes full tank (vehicle_range / mpg).
+      - initial_fuel: Initial fuel in gallons. If None, assumes full tank.
+      - reserve_fuel: Safety fuel reserve in gallons (default: 3.0).
     
     Returns:
       A dictionary containing:
@@ -133,6 +134,12 @@ def find_optimal_fuel_stops(route_coords, stations, vehicle_range=500.0, mpg=10.
         initial_fuel = tank_capacity
     else:
         initial_fuel = min(float(initial_fuel), tank_capacity)
+
+    if initial_fuel < reserve_fuel:
+        return {
+            "success": False,
+            "error": f"Initial fuel ({initial_fuel:.2f} gal) is less than the required safety reserve ({reserve_fuel:.2f} gal)."
+        }
 
     # 1. Downsample route coords for performance (e.g. at most 300 points)
     n_coords = len(route_coords)
@@ -152,14 +159,12 @@ def find_optimal_fuel_stops(route_coords, stations, vehicle_range=500.0, mpg=10.
     total_distance = cumulative_dist[-1]
     
     # 2. Filter stations along the route using a spatial index (numpy broadcast)
-    # Bounding box filter first
     route_lats = np.array([c[0] for c in simplified_coords])
     route_lons = np.array([c[1] for c in simplified_coords])
     
     lat_min, lat_max = route_lats.min() - 0.2, route_lats.max() + 0.2
     lon_min, lon_max = route_lons.min() - 0.2, route_lons.max() + 0.2
     
-    # Filter stations in DB using bounding box
     candidate_stations = []
     for s in stations:
         if lat_min <= s.latitude <= lat_max and lon_min <= s.longitude <= lon_max:
@@ -167,7 +172,7 @@ def find_optimal_fuel_stops(route_coords, stations, vehicle_range=500.0, mpg=10.
             
     if not candidate_stations:
         # If no stations inside box (e.g. very short trip), check if start -> finish is possible
-        if total_distance <= initial_fuel * mpg:
+        if total_distance <= (initial_fuel - reserve_fuel) * mpg:
             return {
                 "success": True,
                 "stops": [],
@@ -190,210 +195,287 @@ def find_optimal_fuel_stops(route_coords, stations, vehicle_range=500.0, mpg=10.
                 ]
             }
         else:
-            return {"success": False, "error": f"Route is {total_distance:.1f} miles but initial range is only {initial_fuel * mpg:.1f} miles and no fueling stations are nearby."}
+            return {"success": False, "error": f"Route is {total_distance:.1f} miles but initial safe range is only {(initial_fuel - reserve_fuel) * mpg:.1f} miles and no fueling stations are nearby."}
 
     # Compute distances from candidate stations to all route points
     station_lats = np.array([s.latitude for s in candidate_stations])
     station_lons = np.array([s.longitude for s in candidate_stations])
     
-    # Pairwise distance matrix of shape (num_stations, num_route_points)
     dist_matrix = haversine_matrix(station_lats, station_lons, route_lats, route_lons)
-    
-    # Find closest route point for each station
     closest_route_indices = np.argmin(dist_matrix, axis=1)
     min_distances = dist_matrix[np.arange(len(candidate_stations)), closest_route_indices]
     
-    # Filter stations within 10 miles of the route path
+    # Filter stations within 10 miles of the route path corridor
     valid_indices = np.where(min_distances <= 10.0)[0]
     
-    stations_along_route = []
+    raw_stations = []
     for idx in valid_indices:
         station = candidate_stations[idx]
         route_point_idx = closest_route_indices[idx]
-        stations_along_route.append({
+        raw_stations.append({
             "model": station,
             "route_dist": cumulative_dist[route_point_idx],
             "perp_dist": min_distances[idx]
         })
         
     # Sort stations along the route by cumulative route distance
-    stations_along_route.sort(key=lambda x: x["route_dist"])
+    raw_stations.sort(key=lambda x: x["route_dist"])
     
-    # 3. Dynamic Programming Formulation
-    # Let 0 be Start (D=0), 1..M be stations, M+1 be Finish (D=total_distance)
-    M = len(stations_along_route)
+    # Merge stations within 3.0 miles of each other, keeping only the cheapest one
+    merged_stations = []
+    if raw_stations:
+        current_cluster = [raw_stations[0]]
+        for item in raw_stations[1:]:
+            if item["route_dist"] - current_cluster[0]["route_dist"] <= 3.0:
+                current_cluster.append(item)
+            else:
+                # Keep the cheapest one in the cluster
+                cheapest = min(current_cluster, key=lambda x: x["model"].retail_price)
+                merged_stations.append(cheapest)
+                current_cluster = [item]
+        cheapest = min(current_cluster, key=lambda x: x["model"].retail_price)
+        merged_stations.append(cheapest)
+
+    # 3. DP Graph Construction
+    M = len(merged_stations)
     nodes = []
     nodes.append({
         "type": "start",
         "dist": 0.0,
-        "price": 0.0, # Start has no price
+        "perp": 0.0,
+        "price": 0.0,
         "station": None
     })
-    for item in stations_along_route:
+    for item in merged_stations:
         nodes.append({
             "type": "station",
             "dist": item["route_dist"],
+            "perp": item["perp_dist"],
             "price": item["model"].retail_price,
             "station": item["model"]
         })
     nodes.append({
         "type": "finish",
         "dist": total_distance,
+        "perp": 0.0,
         "price": 0.0,
         "station": None
     })
     
-    # DP arrays
-    # dp[j] is the min cost to reach node j with a full tank of fuel
-    # parent[j] is the previous node index in the optimal path
-    # fuel_on_arrival[j] is the fuel left when arriving at node j BEFORE refilling
-    dp = [float('inf')] * (M + 2)
-    parent = [-1] * (M + 2)
-    fuel_on_arrival = [0.0] * (M + 2)
-    
-    # Base cases for nodes reachable directly from Start (0)
-    for j in range(1, M + 1):
-        d_j = nodes[j]["dist"]
-        # Can we reach station j from start?
-        if d_j <= initial_fuel * mpg:
-            # Arrive at j with: initial_fuel - d_j / mpg
-            rem_fuel = initial_fuel - d_j / mpg
-            fuel_on_arrival[j] = rem_fuel
-            # Cost to refill to capacity C at station j:
-            dp[j] = (tank_capacity - rem_fuel) * nodes[j]["price"]
-            parent[j] = 0
+    def get_leg_distance(a, b):
+        dist_a = nodes[a]["dist"]
+        dist_b = nodes[b]["dist"]
+        perp_a = nodes[a]["perp"]
+        perp_b = nodes[b]["perp"]
+        if a == 0:
+            if b == M + 1:
+                return dist_b
+            return dist_b + perp_b
+        else:
+            if b == M + 1:
+                return (dist_b - dist_a) + perp_a
+            return (dist_b - dist_a) + perp_a + perp_b
 
-    # DP transitions between stations
+    # dp[j][i]: min cost to reach node j having performed the last refuel at node i
+    dp = [[float('inf')] * (M + 2) for _ in range(M + 2)]
+    parent = [[-1] * (M + 2) for _ in range(M + 2)]
+    
+    # Base cases: Reach station j directly from Start (0)
     for j in range(1, M + 1):
-        for i in range(1, j):
-            if dp[i] == float('inf'):
+        d_leg = get_leg_distance(0, j)
+        if d_leg <= (initial_fuel - reserve_fuel) * mpg:
+            dp[j][0] = 0.0
+            parent[j][0] = -1
+
+    # DP transitions: From last stop j, to next node k, coming from previous stop i
+    for j in range(1, M + 1):
+        for k in range(j + 1, M + 2):
+            d_jk = get_leg_distance(j, k)
+            if d_jk > (tank_capacity - reserve_fuel) * mpg:
                 continue
-            d_diff = nodes[j]["dist"] - nodes[i]["dist"]
-            # Can we reach station j from station i?
-            if d_diff <= vehicle_range:
-                # We left i with a full tank (capacity). Arrive at j with:
-                rem_fuel = tank_capacity - d_diff / mpg
-                # Cost is: dp[i] + fuel we need to buy at j to get back to full tank
-                cost = dp[i] + (tank_capacity - rem_fuel) * nodes[j]["price"]
-                if cost < dp[j]:
-                    dp[j] = cost
-                    parent[j] = i
-                    fuel_on_arrival[j] = rem_fuel
+                
+            # Target fuel leaving j
+            if k == M + 1:
+                f_leave = d_jk / mpg + reserve_fuel
+            else:
+                if nodes[j]["price"] < nodes[k]["price"]:
+                    f_leave = tank_capacity
+                else:
+                    f_leave = d_jk / mpg + reserve_fuel
+                    
+            for i in range(j):
+                if dp[j][i] == float('inf'):
+                    continue
+                    
+                # Fuel on arrival at j from path i -> j
+                d_ij = get_leg_distance(i, j)
+                if i == 0:
+                    f_arr = initial_fuel - d_ij / mpg
+                else:
+                    if nodes[i]["price"] < nodes[j]["price"]:
+                        f_arr = tank_capacity - d_ij / mpg
+                    else:
+                        f_arr = reserve_fuel
+                        
+                if f_arr < reserve_fuel:
+                    continue
+                    
+                bought = max(0.0, f_leave - f_arr)
+                cost_added = bought * nodes[j]["price"]
+                total_cost = dp[j][i] + cost_added
+                if total_cost < dp[k][j]:
+                    dp[k][j] = total_cost
+                    parent[k][j] = i
 
-    # Transition to Finish (M + 1)
+    # Find overall best path to Finish (M + 1)
     min_finish_cost = float('inf')
-    best_prev_node = -1
+    best_last_stop = -1
     
-    # Case A: Reach Finish directly from Start (no stops)
-    if total_distance <= initial_fuel * mpg:
+    # Case A: Start -> Finish directly
+    d_direct = get_leg_distance(0, M + 1)
+    if d_direct <= (initial_fuel - reserve_fuel) * mpg:
         min_finish_cost = 0.0
-        best_prev_node = 0
-        fuel_on_arrival[M + 1] = initial_fuel - total_distance / mpg
+        best_last_stop = 0
         
-    # Case B: Reach Finish from one of the stations
-    for i in range(1, M + 1):
-        if dp[i] == float('inf'):
-            continue
-        d_diff = total_distance - nodes[i]["dist"]
-        if d_diff <= vehicle_range:
-            # We left station i with a full tank.
-            # We don't refill at the Finish, but the fuel we burned was purchased at station i.
-            # So the cost is: dp[i] (which includes all prior refills)
-            cost = dp[i]
-            if cost < min_finish_cost:
-                min_finish_cost = cost
-                best_prev_node = i
-                fuel_on_arrival[M + 1] = tank_capacity - d_diff / mpg
+    # Case B: Some last stop j -> Finish
+    for j in range(1, M + 1):
+        for i in range(j):
+            if dp[M + 1][j] < min_finish_cost:
+                min_finish_cost = dp[M + 1][j]
+                best_last_stop = j
 
     if min_finish_cost == float('inf'):
         return {"success": False, "error": f"Route is {total_distance:.1f} miles, but no valid fueling plan could be constructed with a maximum range of {vehicle_range:.1f} miles and the current station database."}
 
-    # Backtrack to reconstruct the optimal path of stops
+    # 4. Backtrack to reconstruct state path
     stops = []
-    curr = best_prev_node
-    while curr > 0:
-        stops.append(curr)
-        curr = parent[curr]
-    stops.reverse()
-    
-    # Build detailed itinerary and stops list
-    stop_details = []
-    itinerary = []
-    
-    # Add start
-    itinerary.append({
-        "type": "start",
-        "name": "Start Location",
-        "distance": 0.0,
-        "fuel_level": initial_fuel,
-        "message": f"Start journey with {initial_fuel:.2f} gallons in the tank."
-    })
-    
-    curr_fuel = initial_fuel
-    prev_dist = 0.0
-    
-    for idx in stops:
-        node = nodes[idx]
-        station = node["station"]
-        dist_to_stop = node["dist"]
-        leg_dist = dist_to_stop - prev_dist
+    if best_last_stop > 0:
+        best_state = (M + 1, best_last_stop)
+        state_path = []
+        curr_state = best_state
+        while curr_state[1] > 0:
+            state_path.append(curr_state)
+            k, j = curr_state
+            i = parent[k][j]
+            curr_state = (j, i)
+        state_path.reverse()
         
-        # Fuel before refilling
-        fuel_before = curr_fuel - (leg_dist / mpg)
-        fuel_bought = tank_capacity - fuel_before
-        cost = fuel_bought * station.retail_price
-        
-        stop_details.append({
-            "id": station.id,
-            "opis_id": station.opis_id,
-            "name": station.name,
-            "address": station.address,
-            "city": station.city,
-            "state": station.state,
-            "price": station.retail_price,
-            "latitude": station.latitude,
-            "longitude": station.longitude,
-            "distance_along_route": dist_to_stop,
-            "fuel_bought": fuel_bought,
-            "cost": cost
-        })
+        # Re-simulate path for itinerary
+        stop_details = []
+        itinerary = []
         
         itinerary.append({
-            "type": "fuel_stop",
-            "name": station.name,
-            "city": station.city,
-            "state": station.state,
-            "distance": dist_to_stop,
-            "leg_distance": leg_dist,
-            "fuel_before": fuel_before,
-            "fuel_bought": fuel_bought,
-            "price": station.retail_price,
-            "cost": cost,
-            "message": f"Drive {leg_dist:.1f} miles. Arrive at {station.name} ({station.city}, {station.state}) with {fuel_before:.2f} gallons. Refill {fuel_bought:.2f} gallons to full capacity ({tank_capacity:.1f} gallons) at ${station.retail_price:.3f}/gal. Cost: ${cost:.2f}."
+            "type": "start",
+            "name": "Start Location",
+            "distance": 0.0,
+            "fuel_level": initial_fuel,
+            "message": f"Start journey with {initial_fuel:.2f} gallons in the tank."
         })
         
-        # After stop, tank is full
-        curr_fuel = tank_capacity
-        prev_dist = dist_to_stop
+        curr_fuel = initial_fuel
+        curr_node = 0
+        total_dist_traveled = 0.0
         
-    # Last leg to finish
-    last_leg_dist = total_distance - prev_dist
-    final_fuel = curr_fuel - (last_leg_dist / mpg)
-    
-    itinerary.append({
-        "type": "finish",
-        "name": "Destination",
-        "distance": total_distance,
-        "leg_distance": last_leg_dist,
-        "fuel_level": final_fuel,
-        "message": f"Drive final {last_leg_dist:.1f} miles. Arrive at destination with {final_fuel:.2f} gallons remaining."
-    })
-    
-    return {
-        "success": True,
-        "stops": stop_details,
-        "total_cost": min_finish_cost,
-        "total_fuel_consumed": total_distance / mpg,
-        "total_distance": total_distance,
-        "itinerary": itinerary
-    }
+        for idx_path, (next_next_node, stop_node) in enumerate(state_path):
+            station = nodes[stop_node]["station"]
+            d_leg = get_leg_distance(curr_node, stop_node)
+            total_dist_traveled += d_leg
+            
+            f_arr = curr_fuel - d_leg / mpg
+            
+            # Determine target fuel leaving stop_node
+            d_next = get_leg_distance(stop_node, next_next_node)
+            if next_next_node == M + 1:
+                f_leave = d_next / mpg + reserve_fuel
+            else:
+                if nodes[stop_node]["price"] < nodes[next_next_node]["price"]:
+                    f_leave = tank_capacity
+                else:
+                    f_leave = d_next / mpg + reserve_fuel
+                    
+            bought = max(0.0, f_leave - f_arr)
+            cost = bought * nodes[stop_node]["price"]
+            
+            stop_details.append({
+                "id": station.id,
+                "opis_id": station.opis_id,
+                "name": station.name,
+                "address": station.address,
+                "city": station.city,
+                "state": station.state,
+                "price": station.retail_price,
+                "latitude": station.latitude,
+                "longitude": station.longitude,
+                "distance_along_route": nodes[stop_node]["dist"],
+                "detour_distance": nodes[stop_node]["perp"] * 2.0, # Round trip detour
+                "fuel_bought": bought,
+                "cost": cost
+            })
+            
+            detour_str = f" (Detour: {nodes[stop_node]['perp'] * 2.0:.1f} mi)" if nodes[stop_node]['perp'] > 0 else ""
+            itinerary.append({
+                "type": "fuel_stop",
+                "name": station.name,
+                "city": station.city,
+                "state": station.state,
+                "distance": nodes[stop_node]["dist"],
+                "leg_distance": d_leg,
+                "fuel_before": f_arr,
+                "fuel_bought": bought,
+                "price": station.retail_price,
+                "cost": cost,
+                "message": f"Drive {d_leg:.1f} miles{detour_str}. Arrive at {station.name} ({station.city}, {station.state}) with {f_arr:.2f} gallons. Refill {bought:.2f} gallons at ${station.retail_price:.3f}/gal. Cost: ${cost:.2f}."
+            })
+            
+            curr_fuel = f_leave
+            curr_node = stop_node
+            
+        # Last leg to finish
+        d_last = get_leg_distance(curr_node, M + 1)
+        total_dist_traveled += d_last
+        final_fuel = curr_fuel - d_last / mpg
+        
+        itinerary.append({
+            "type": "finish",
+            "name": "Destination",
+            "distance": total_dist_traveled,
+            "leg_distance": d_last,
+            "fuel_level": final_fuel,
+            "message": f"Drive final {d_last:.1f} miles. Arrive at destination with {final_fuel:.2f} gallons remaining."
+        })
+        
+        return {
+            "success": True,
+            "stops": stop_details,
+            "total_cost": min_finish_cost,
+            "total_fuel_consumed": total_dist_traveled / mpg,
+            "total_distance": total_dist_traveled,
+            "itinerary": itinerary
+        }
+    else:
+        # Start -> Finish directly
+        d_direct = get_leg_distance(0, M + 1)
+        return {
+            "success": True,
+            "stops": [],
+            "total_cost": 0.0,
+            "total_fuel_consumed": d_direct / mpg,
+            "total_distance": d_direct,
+            "itinerary": [
+                {
+                    "type": "start",
+                    "name": "Start Location",
+                    "distance": 0.0,
+                    "fuel_level": initial_fuel,
+                    "message": f"Start journey with {initial_fuel:.2f} gallons in the tank."
+                },
+                {
+                    "type": "finish",
+                    "name": "Destination",
+                    "distance": d_direct,
+                    "leg_distance": d_direct,
+                    "fuel_level": initial_fuel - d_direct / mpg,
+                    "message": f"Drive final {d_direct:.1f} miles. Arrive at destination with {initial_fuel - d_direct / mpg:.2f} gallons remaining."
+                }
+            ]
+        }

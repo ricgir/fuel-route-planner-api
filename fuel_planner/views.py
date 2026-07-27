@@ -34,12 +34,13 @@ def route_api_view(request):
     try:
         vehicle_range = float(request.GET.get('range', 500.0))
         mpg = float(request.GET.get('mpg', 10.0))
-        if vehicle_range <= 0 or mpg <= 0:
+        reserve_fuel = float(request.GET.get('reserve', 3.0))
+        if vehicle_range <= 0 or mpg <= 0 or reserve_fuel < 0:
             raise ValueError()
     except ValueError:
         return JsonResponse({
             "success": False,
-            "error": "Parameters 'range' and 'mpg' must be positive numbers."
+            "error": "Parameters 'range', 'mpg', and 'reserve' must be valid numbers (range and mpg positive, reserve non-negative)."
         }, status=400)
 
     # Tank capacity
@@ -102,7 +103,8 @@ def route_api_view(request):
         stations=stations,
         vehicle_range=vehicle_range,
         mpg=mpg,
-        initial_fuel=initial_fuel
+        initial_fuel=initial_fuel,
+        reserve_fuel=reserve_fuel
     )
     
     if not optimization_result["success"]:
